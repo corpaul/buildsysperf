@@ -1,7 +1,7 @@
 import csv
 from collections import defaultdict
 import re
-
+import pprint
 
 class GDFParser():
     def __init__(self):
@@ -30,13 +30,15 @@ class GDFParser():
             print "(dependencies: %s)" % b.dependencies
             b.tracestring = self.parse_dependencies_trace(b)
             self.reset_is_built()
+            self.current_trace_time = 0
 
             # print "\n\n----------------\ncalculating triggered buildtime for %s" % b.name
             # b.triggered_buildtime = self.calc_triggered_buildtime(b)
         print "Done generating stack traces"
+        pp = pprint.PrettyPrinter()
         for b in self.builditems.itervalues():
             print "%s: %d" % (b.name, len(b.tracestring))
-            self.outputfile.write("%s \n" % b.tracestring)
+            self.outputfile.write("%s \n" % pp.pformat(b.tracestring))
             # self.outputfile.write("%s \n" % self.formatted_tracestring(b.tracestring))
 
 
@@ -66,11 +68,11 @@ class GDFParser():
         if obj.is_built and obj.traces_definitive:
             return ["BUILT ALREADY (%s)" % obj.name]
         if len(obj.dependencies) == 0:
-            return [obj.name]
+            return [(obj.name, obj.buildtime)]
         if not obj.traces_definitive:
             # obj does not have dependencies: leaf of tree
             # store name in obj trace string and return it
-            obj.tracestring.append(obj.name)
+            obj.tracestring.append((obj.name, obj.buildtime))
             for d in obj.dependencies:
                 dep = self.builditems[d]
             # obj.tracestring.append(obj.name)
