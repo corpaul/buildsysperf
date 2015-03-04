@@ -63,6 +63,8 @@ class GDFParser():
     def parse_dependencies_trace(self, obj):
         # obj.traces_definitive indicates we have calculated all traces for obj
         # if False we have to calculate them
+        if obj.is_built and obj.traces_definitive:
+            return ["BUILT ALREADY (%s)" % obj.name]
         if len(obj.dependencies) == 0:
             return [obj.name]
         if not obj.traces_definitive:
@@ -77,6 +79,7 @@ class GDFParser():
                 if len(dep_deps) > 0:
                     obj.tracestring.append(dep_deps)
             obj.traces_definitive = True
+        obj.is_built = True
         return obj.tracestring
 
         # else:
