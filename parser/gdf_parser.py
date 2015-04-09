@@ -2,11 +2,15 @@ import csv
 from collections import defaultdict
 import re
 import pprint
+import os
+
 
 class GDFParser():
-    def __init__(self):
+    def __init__(self, app, version):
         self.builditems = defaultdict()
-        self.outputfile = open("traces", 'w')
+        self.paths = list()
+        self.app = app
+        self.version = version
 
     def parse_file(self, f):
         parsing_depencies = False
@@ -18,8 +22,7 @@ class GDFParser():
                 if row[0] == "edgedef> node1":
                     parsing_depencies = True
                 elif not parsing_depencies:
-                    self.parse_buildtime(row)
-
+                    self.parse_nodedef(row)
                 elif row[6] == "0":
                     self.parse_dependencies(row[1], row[0])
 
@@ -28,23 +31,48 @@ class GDFParser():
         for b in self.builditems.itervalues():
             print "\n\n--------------\nbuilding trace for %s" % b.name
             print "(dependencies: %s)" % b.dependencies
-            b.tracestring = self.parse_dependencies_trace(b)
+            # b.tracestring = self.parse_dependencies_trace(b)
+            # print self.parse_dependencies_lambda(b)
+            self.find_deps(b)
             self.reset_is_built()
             self.current_trace_time = 0
+
+
+
 
             # print "\n\n----------------\ncalculating triggered buildtime for %s" % b.name
             # b.triggered_buildtime = self.calc_triggered_buildtime(b)
         print "Done generating stack traces"
-        pp = pprint.PrettyPrinter()
-        for b in self.builditems.itervalues():
-            print "%s: %d" % (b.name, len(b.tracestring))
-            self.outputfile.write("%s \n" % pp.pformat(b.tracestring))
-            # self.outputfile.write("%s \n" % self.formatted_tracestring(b.tracestring))
+        print "Building directory flame graph..."
+        self.write_directory_flamegraph_data()
+        print "Done"
+
+        print "Building flamegraphs for each node (this may take a while)"
+        # self.write_flamegraph_data()
+        print "Done"
 
 
-    def parse_buildtime(self, r):
+
+    def parse_nodedef(self, r):
         item = BuildItem(r[0])
+
+        # parse directory:
+        dir = r[9]
+        item.dir = dir
+        print "Dir: %s" % dir
+        # totalelapsedtime:
         bt_str = r[14]
+        item.triggered_buildtime = self.str_to_buildtime(bt_str)
+
+        # ownelapsedtime:
+        bt_str = r[17]
+
+        item.buildtime = self.str_to_buildtime(bt_str)
+        self.builditems[r[0]] = item
+
+        return
+
+    def str_to_buildtime(self, bt_str):
         if bt_str == "[]":
             bt = 0
         else:
@@ -52,62 +80,38 @@ class GDFParser():
             bt_hms = bt_str.replace("[", "").replace("]", "").split(";")
             for b in bt_hms:
                 bt = self.hms_to_seconds(b)
-        item.buildtime = bt
-        self.builditems[r[0]] = item
-
-        return
+        return bt
 
     def parse_dependencies(self, obj, triggers):
         self.builditems[obj].dependencies.append(triggers)
 
-    # parse the string containing the 'trace' for build items
-    # still broken... check at home again
-    def parse_dependencies_trace(self, obj):
-        # obj.traces_definitive indicates we have calculated all traces for obj
-        # if False we have to calculate them
-        if obj.is_built and obj.traces_definitive:
-            return ["BUILT ALREADY (%s)" % obj.name]
+    def find_deps(self, obj):
+        self.find_dependencies(obj, [], 0)
+
+
+    def find_dependencies(self, obj, path, buildtime):
+        if obj.is_built:
+            path.append(obj.name + "(BUILT)")
+            self.paths.append(Trace(path, buildtime))
+            return
+        path.append(obj.name)
+
         if len(obj.dependencies) == 0:
-            return [(obj.name, obj.buildtime)]
-        if not obj.traces_definitive:
-            # obj does not have dependencies: leaf of tree
-            # store name in obj trace string and return it
-            obj.tracestring.append((obj.name, obj.buildtime))
-            for d in obj.dependencies:
-                dep = self.builditems[d]
-            # obj.tracestring.append(obj.name)
-            # trace = obj.name + "->" + self.parse_dependencies_trace(dep)
-                dep_deps = self.parse_dependencies_trace(dep)
-                if len(dep_deps) > 0:
-                    obj.tracestring.append(dep_deps)
-            obj.traces_definitive = True
-        obj.is_built = True
-        return obj.tracestring
-
-        # else:
-        #    return obj.tracestring
-        # obj.traces_definitive = True
-        # return ["%s (BUILT ALREADY)" % obj.name]
-        # return ["%s" % obj.name]
-
-    # broken
-    def calc_triggered_buildtime(self, obj):
-        buildtime = 0
-        print "calculating dependencies for %s: %s" % (obj.name, obj.dependencies)
-        if obj.triggered_buildtime > -1:
-            return obj.triggered_buildtime
-        for b in obj.dependencies:
-            buildtime += self.builditems[b].buildtime
-            buildtime += self.calc_triggered_buildtime(self.builditems[b])
-        obj.triggered_buildtime = buildtime
-        print "triggered buildtime calculated: %d for %s" % (buildtime, obj.name)
-        return buildtime
+            buildtime = obj.triggered_buildtime + buildtime
+            self.paths.append(Trace(path, buildtime))
+        else:
+            # not sure if buildtimes are 100% correct.. I'd like to use ownelapsedtime everywhere but
+            # 'all' requires totalelapsedtime
+            buildtime = obj.buildtime + buildtime
+            for n in obj.dependencies:
+                dep = self.builditems[n]
+                self.find_dependencies(dep, list(path), buildtime)
+                dep.is_built = True
 
     def reset_is_built(self):
         for b in self.builditems.itervalues():
             b.is_built = False
             # b.traces_definitive = False
-
 
     def print_dependencies(self):
         for d in self.builditems.itervalues():
@@ -133,20 +137,63 @@ class GDFParser():
             print "Unknown time format: %s (using 0 instead)" % t
             return 0
 
+    def write_directory_flamegraph_data(self):
+        filename = "../output/%s_%s" % (app, version)
+        self.outputfile = open(filename, 'w')
+
+        for b in self.builditems.itervalues():
+            if len(b.dependencies) == 0:
+                buildtime = b.triggered_buildtime + b.buildtime
+            else:
+                buildtime = b.buildtime
+            self.outputfile.write("%s;%s %d\n" % (b.dir.replace("/", ";"), b.name, buildtime))
+
+        self.outputfile.close()
+        os.system("cat %s | ../../flamegraphdiff/FlameGraph/flamegraph.pl > %s.svg" % (filename, filename))
+
+
+    def write_flamegraph_data(self):
+        for p in self.paths:
+            filename = "../output/%s_%s_%s" % (app, version, p.trace[0])
+            self.outputfile = open(filename, 'w')
+            self.outputfile.write("%s %d\n" % (';'.join(p.trace), p.buildtime))
+            self.outputfile.close()
+            os.system("cat %s | ../../flamegraphdiff/FlameGraph/flamegraph.pl > %s.svg" % (filename, filename))
+
+
+
 
 
 class BuildItem():
     def __init__(self, name):
         self.name = name
+        self.dir = ""
         self.buildtime = 0
         self.triggered_buildtime = -1
         self.dependencies = []
-        self.tracestring = []
+        # self.nodes = []
+        self.trace = []
         self.traces_definitive = False
         self.is_built = False
 
+class Trace():
+    def __init__(self, trace, buildtime):
+        self.trace = trace
+        self.buildtime = buildtime
+
+    def __str__(self):
+        return "%s (%d)\n" % (self.trace, self.buildtime)
+
+
 if __name__ == "__main__":
-    filename = "../data/glib/glib-2.24.0/trace1.gdf"
-    parser = GDFParser()
-    parser.parse_file(filename)
-    # parser.print_dependencies()
+    datadir = "../data/glib"
+    app = "glib"
+    for x in os.listdir(datadir):
+        if not os.path.isdir(os.path.join(datadir, x)):
+            continue
+        version = x
+
+        file = "%s/%s/trace1.gdf" % (datadir, version)
+        parser = GDFParser(app, version)
+        parser.parse_file(file)
+        # parser.print_dependencies()
