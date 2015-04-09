@@ -3,7 +3,7 @@ from collections import defaultdict
 import re
 import pprint
 import os
-
+from numpy import mean
 
 class GDFParser():
     def __init__(self, app, version):
@@ -13,35 +13,23 @@ class GDFParser():
         self.version = version
 
     def parse_file(self, f):
-        parsing_depencies = False
-        with open(f, 'rb') as csvfile:
-            reader = csv.reader(csvfile, delimiter=',', quotechar='|')
-            # skip headers
-            next(reader)
-            for row in reader:
-                if row[0] == "edgedef> node1":
-                    parsing_depencies = True
-                elif not parsing_depencies:
-                    self.parse_nodedef(row)
-                elif row[6] == "0":
-                    self.parse_dependencies(row[1], row[0])
+        self.parse_builditems(f)
+
+        # take averages for build times from all traces
+        self.take_averages(f)
+
+
+        # assume for now all dependencies are the same throughout the different traces for each version
 
         print "Generating stack traces"
         # calculate all triggered_buildtime
         for b in self.builditems.itervalues():
-            print "\n\n--------------\nbuilding trace for %s" % b.name
-            print "(dependencies: %s)" % b.dependencies
-            # b.tracestring = self.parse_dependencies_trace(b)
-            # print self.parse_dependencies_lambda(b)
+            # print "\n\n--------------\nbuilding trace for %s" % b.name
+            # print "(dependencies: %s)" % b.dependencies
             self.find_deps(b)
             self.reset_is_built()
             self.current_trace_time = 0
 
-
-
-
-            # print "\n\n----------------\ncalculating triggered buildtime for %s" % b.name
-            # b.triggered_buildtime = self.calc_triggered_buildtime(b)
         print "Done generating stack traces"
         print "Building directory flame graph..."
         self.write_directory_flamegraph_data()
@@ -51,24 +39,62 @@ class GDFParser():
         # self.write_flamegraph_data()
         print "Done"
 
+    def take_averages(self, f):
+        # get path
+        dir = os.path.dirname(f)
+        for l in os.listdir(dir):
+            ext = os.path.splitext(l)[1]
+            if ext == ".gdf":
+                print "parsing: %s" % os.path.join(dir, l)
+                self.parse_builditems(os.path.join(dir, l), True)
+
+        # see if there are other trace files
+        # process
+
+    def parse_builditems(self, f, avg=False):
+        parsing_depencies = False
+        with open(f, 'rb') as csvfile:
+            reader = csv.reader(csvfile, delimiter=',', quotechar='|')
+            # skip headers
+            next(reader)
+            for row in reader:
+                if row[0] == "edgedef> node1":
+                    parsing_depencies = True
+                elif not parsing_depencies:
+                    self.parse_nodedef(row, avg)
+                elif row[6] == "0" and not avg:
+                    self.parse_dependencies(row[1], row[0])
 
 
-    def parse_nodedef(self, r):
-        item = BuildItem(r[0])
-
-        # parse directory:
+    def parse_nodedef(self, r, avg=False):
         dir = r[9]
-        item.dir = dir
-        print "Dir: %s" % dir
         # totalelapsedtime:
-        bt_str = r[14]
-        item.triggered_buildtime = self.str_to_buildtime(bt_str)
-
+        bt_total_str = r[14]
         # ownelapsedtime:
         bt_str = r[17]
 
-        item.buildtime = self.str_to_buildtime(bt_str)
-        self.builditems[r[0]] = item
+        # or appending the average buildtime
+        if avg:
+            if r[0] in self.builditems:
+                item = self.builditems[r[0]]
+            else:
+                print "%s not found in first trace file" % r[0]
+                return
+
+
+            # print "averaging total: %d, %d" % (self.str_to_buildtime(bt_total_str), item.triggered_buildtime)
+            item.triggered_buildtime = mean([self.str_to_buildtime(bt_total_str), item.triggered_buildtime])
+            # print "averaging total: %d, %d" % (self.str_to_buildtime(bt_str), item.buildtime)
+            item.buildtime = mean([self.str_to_buildtime(bt_str), item.buildtime])
+
+        # are we creating a builditem
+        else:
+            item = BuildItem(r[0])
+            item.dir = dir
+
+            item.triggered_buildtime = self.str_to_buildtime(bt_str)
+            item.buildtime = self.str_to_buildtime(bt_str)
+            self.builditems[r[0]] = item
 
         return
 
@@ -76,7 +102,6 @@ class GDFParser():
         if bt_str == "[]":
             bt = 0
         else:
-            print bt_str
             bt_hms = bt_str.replace("[", "").replace("]", "").split(";")
             for b in bt_hms:
                 bt = self.hms_to_seconds(b)
@@ -188,12 +213,48 @@ class Trace():
 if __name__ == "__main__":
     datadir = "../data/glib"
     app = "glib"
-    for x in os.listdir(datadir):
-        if not os.path.isdir(os.path.join(datadir, x)):
+    for version in sorted(os.listdir(datadir)):
+        if not os.path.isdir(os.path.join(datadir, version)):
             continue
-        version = x
-
         file = "%s/%s/trace1.gdf" % (datadir, version)
-        parser = GDFParser(app, version)
-        parser.parse_file(file)
-        # parser.print_dependencies()
+        # parser = GDFParser(app, version)
+        # parser.parse_file(file)
+
+    # generate DFGs
+    print "Generating DFGs"
+    i = 0
+    for version in sorted(os.listdir(datadir)):
+        if i == 0:
+            old = version
+            i = i + 1
+            continue
+        new = version
+        # make DFG from old, new
+        outputdir = "../buildsysperf/output/"
+
+
+        filename_old_new = "%s_%s-%s" % (app, old, new)
+        filename_new_old = "%s_%s-%s" % (app, new, old)
+        filename_diff = "diff_%s" % filename_new_old
+        set_directory = os.path.join(outputdir, "%s-set" % filename_diff)
+        oldfile = "%s_%s" % (app, old)
+        newfile = "%s_%s" % (app, new)
+        os.system("cd ../../flamegraphdiff/ && mkdir %s" % set_directory)
+        os.system("cd ../../flamegraphdiff/ && FlameGraph/difffolded.pl %s %s | FlameGraph/flamegraph.pl > %s.svg"
+                  % (os.path.join(outputdir, newfile), os.path.join(outputdir, oldfile), os.path.join(set_directory, filename_old_new)))
+
+        os.system("cd ../../flamegraphdiff/ && FlameGraph/difffolded.pl %s %s | FlameGraph/flamegraph.pl > %s.svg"
+                  % (os.path.join(outputdir, oldfile), os.path.join(outputdir, newfile), os.path.join(set_directory, filename_new_old)))
+
+        os.system("cd ../../flamegraphdiff/ && FlameGraph/difffolded.pl -d %s %s | FlameGraph/flamegraph.pl > %s.svg"
+                  % (os.path.join(outputdir, oldfile), os.path.join(outputdir, newfile), os.path.join(set_directory, filename_diff)))
+
+        os.system("cd ../../flamegraphdiff/ && graphs/generate_dfg_report.sh %s.svg %s.svg %s.svg %s"
+                  % (filename_old_new, filename_new_old, filename_diff, set_directory))
+        print "%s - %s" % (old, new)
+        old = version
+
+
+# FlameGraph/difffolded.pl demos/rsync/rsync_v2.txt demos/rsync/rsync_v1.txt | FlameGraph/flamegraph.pl > demos/rsync/rsync_dfg1.svg
+# $ FlameGraph/difffolded.pl demos/rsync/rsync_v1.txt demos/rsync/rsync_v2.txt | FlameGraph/flamegraph.pl > demos/rsync/rsync_dfg2.svg
+# $ FlameGraph/difffolded.pl -d demos/rsync/rsync_v1.txt demos/rsync/rsync_v2.txt | FlameGraph/flamegraph.pl > demos/rsync/rsync_dfg_diff.svg
