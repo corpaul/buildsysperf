@@ -6,11 +6,12 @@ import os
 from numpy import mean
 
 class GDFParser():
-    def __init__(self, app, version):
+    def __init__(self, app, version, ignore_path=""):
         self.builditems = defaultdict()
         self.paths = list()
         self.app = app
         self.version = version
+        self.ignore_path = ignore_path
 
     def parse_file(self, f):
         self.parse_builditems(f)
@@ -67,7 +68,10 @@ class GDFParser():
 
 
     def parse_nodedef(self, r, avg=False):
-        dir = r[9]
+        if self.ignore_path != "":
+            dir = r[9].replace(self.ignore_path, "")
+        else:
+            dir = r[9]
         # totalelapsedtime:
         bt_total_str = r[14]
         # ownelapsedtime:
@@ -115,11 +119,12 @@ class GDFParser():
 
 
     def find_dependencies(self, obj, path, buildtime):
+        node_name = self.format_name(obj)
         if obj.is_built:
-            path.append(obj.name + "(BUILT)")
+            path.append(node_name + "(BUILT)")
             self.paths.append(Trace(path, buildtime))
             return
-        path.append(obj.name)
+        path.append(node_name)
 
         if len(obj.dependencies) == 0:
             buildtime = obj.triggered_buildtime + buildtime
@@ -167,11 +172,15 @@ class GDFParser():
         self.outputfile = open(filename, 'w')
 
         for b in self.builditems.itervalues():
+            # let's skip the 'all' node for now.. as the complete flamegraph should represent the all node
+            if b.name == "all":
+                continue
             if len(b.dependencies) == 0:
                 buildtime = b.triggered_buildtime + b.buildtime
             else:
                 buildtime = b.buildtime
-            self.outputfile.write("%s;%s %d\n" % (b.dir.replace("/", ";"), b.name, buildtime))
+            node_name = self.format_name(b)
+            self.outputfile.write("%s;%s %d\n" % (b.dir.replace("/", ";"), node_name, buildtime))
 
         self.outputfile.close()
         os.system("cat %s | ../../flamegraphdiff/FlameGraph/flamegraph.pl > %s.svg" % (filename, filename))
@@ -186,7 +195,8 @@ class GDFParser():
             os.system("cat %s | ../../flamegraphdiff/FlameGraph/flamegraph.pl > %s.svg" % (filename, filename))
 
 
-
+    def format_name(self, b):
+        return b.name[b.name.find('_') + 1:]
 
 
 class BuildItem():
@@ -216,9 +226,11 @@ if __name__ == "__main__":
     for version in sorted(os.listdir(datadir)):
         if not os.path.isdir(os.path.join(datadir, version)):
             continue
+        ignore_path = "/home/adan/source/rbCode/%s/" % version
+
         file = "%s/%s/trace1.gdf" % (datadir, version)
-        # parser = GDFParser(app, version)
-        # parser.parse_file(file)
+        parser = GDFParser(app, version, ignore_path)
+        parser.parse_file(file)
 
     # generate DFGs
     print "Generating DFGs"
@@ -239,15 +251,15 @@ if __name__ == "__main__":
         set_directory = os.path.join(outputdir, "%s-set" % filename_diff)
         oldfile = "%s_%s" % (app, old)
         newfile = "%s_%s" % (app, new)
-        os.system("cd ../../flamegraphdiff/ && mkdir %s" % set_directory)
-        os.system("cd ../../flamegraphdiff/ && FlameGraph/difffolded.pl %s %s | FlameGraph/flamegraph.pl > %s.svg"
-                  % (os.path.join(outputdir, newfile), os.path.join(outputdir, oldfile), os.path.join(set_directory, filename_old_new)))
+        os.system("cd ../../flamegraphdiff/ && mkdir -p %s" % set_directory)
+        os.system("cd ../../flamegraphdiff/ && FlameGraph/difffolded.pl %s %s | FlameGraph/flamegraph.pl -title='%s' > %s.svg"
+                  % (os.path.join(outputdir, newfile), os.path.join(outputdir, oldfile), filename_old_new, os.path.join(set_directory, filename_old_new)))
 
-        os.system("cd ../../flamegraphdiff/ && FlameGraph/difffolded.pl %s %s | FlameGraph/flamegraph.pl > %s.svg"
-                  % (os.path.join(outputdir, oldfile), os.path.join(outputdir, newfile), os.path.join(set_directory, filename_new_old)))
+        os.system("cd ../../flamegraphdiff/ && FlameGraph/difffolded.pl %s %s | FlameGraph/flamegraph.pl -title='%s'  > %s.svg"
+                  % (os.path.join(outputdir, oldfile), os.path.join(outputdir, newfile), filename_new_old, os.path.join(set_directory, filename_new_old)))
 
-        os.system("cd ../../flamegraphdiff/ && FlameGraph/difffolded.pl -d %s %s | FlameGraph/flamegraph.pl > %s.svg"
-                  % (os.path.join(outputdir, oldfile), os.path.join(outputdir, newfile), os.path.join(set_directory, filename_diff)))
+        os.system("cd ../../flamegraphdiff/ && FlameGraph/difffolded.pl -d %s %s | FlameGraph/flamegraph.pl -title='%s' > %s.svg"
+                  % (os.path.join(outputdir, oldfile), os.path.join(outputdir, newfile), filename_diff, os.path.join(set_directory, filename_diff)))
 
         os.system("cd ../../flamegraphdiff/ && graphs/generate_dfg_report.sh %s.svg %s.svg %s.svg %s"
                   % (filename_old_new, filename_new_old, filename_diff, set_directory))
