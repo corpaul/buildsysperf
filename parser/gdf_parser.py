@@ -6,12 +6,13 @@ import os
 from numpy import mean
 
 class GDFParser():
-    def __init__(self, app, version, ignore_path=""):
+    def __init__(self, app, version, output_dir, ignore_path=""):
         self.builditems = defaultdict()
         self.paths = list()
         self.app = app
         self.version = version
         self.ignore_path = ignore_path
+        self.output_dir = output_dir
 
     def parse_file(self, f):
         self.parse_builditems(f)
@@ -168,7 +169,7 @@ class GDFParser():
             return 0
 
     def write_directory_flamegraph_data(self):
-        filename = "../output/%s_%s" % (app, version)
+        filename = os.path.join(self.output_dir, "%s_%s" % (app, version))
         self.outputfile = open(filename, 'w')
 
         for b in self.builditems.itervalues():
@@ -188,7 +189,7 @@ class GDFParser():
 
     def write_flamegraph_data(self):
         for p in self.paths:
-            filename = "../output/%s_%s_%s" % (app, version, p.trace[0])
+            filename = os.path.join(self.output_dir, "%s_%s_%s" % (app, version, p.trace[0]))
             self.outputfile = open(filename, 'w')
             self.outputfile.write("%s %d\n" % (';'.join(p.trace), p.buildtime))
             self.outputfile.close()
@@ -221,7 +222,8 @@ class Trace():
 
 
 if __name__ == "__main__":
-    datadir = "../data/glib"
+    datadir = "/home/corpaul/workspace/datasets/glib"
+    outputdir = "/home/corpaul/workspace/output/buildsysperf/glib"
     app = "glib"
     for version in sorted(os.listdir(datadir)):
         if not os.path.isdir(os.path.join(datadir, version)):
@@ -229,7 +231,7 @@ if __name__ == "__main__":
         ignore_path = "/home/adan/source/rbCode/%s/" % version
 
         file = "%s/%s/trace1.gdf" % (datadir, version)
-        parser = GDFParser(app, version, ignore_path)
+        parser = GDFParser(app, version, outputdir, ignore_path)
         parser.parse_file(file)
 
     # generate DFGs
@@ -242,8 +244,7 @@ if __name__ == "__main__":
             continue
         new = version
         # make DFG from old, new
-        outputdir = "../buildsysperf/output/"
-
+        
 
         filename_old_new = "%s_%s-%s" % (app, old, new)
         filename_new_old = "%s_%s-%s" % (app, new, old)
