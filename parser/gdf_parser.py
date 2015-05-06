@@ -1,9 +1,9 @@
 import csv
 from collections import defaultdict
 import re
-import pprint
 import os
 from numpy import mean
+import errno
 
 class GDFParser():
     def __init__(self, app, version, output_dir, ignore_path=""):
@@ -185,7 +185,7 @@ class GDFParser():
 
         self.outputfile.close()
         os.system("cat %s | ../../flamegraphdiff/FlameGraph/flamegraph.pl > %s.svg" % (filename, filename))
-
+        self.svg = "%s.svg" % filename
 
     def write_flamegraph_data(self):
         for p in self.paths:
@@ -194,11 +194,32 @@ class GDFParser():
             self.outputfile.write("%s %d\n" % (';'.join(p.trace), p.buildtime))
             self.outputfile.close()
             os.system("cat %s | ../../flamegraphdiff/FlameGraph/flamegraph.pl > %s.svg" % (filename, filename))
+            self.svg = "%s.svg" % filename
 
 
     def format_name(self, b):
         return b.name[b.name.find('_') + 1:]
 
+    def parse_total_time(self):
+        """ A bit hackety-hack to retrieve the calculated total buildtimes from the svg file.
+        There may be more elements named 'all' so check for the largest one (which should be the one on the
+        bottom of the graph) 
+        TODO integrate this with FlameGraph lib """
+        with open(self.svg, 'rb') as svgfile:
+            str = svgfile.read()
+            needle = r"<title>all .* samples"
+            results = re.findall(needle, str)
+            samples = 0
+            for r in results:
+                result = re.search('<title>all \((.*) samples', r)
+                s = result.group(1).replace(",", "")
+                if int(s) > samples:
+                    samples = int(s)
+            
+            self.outputfile = open(os.path.join(self.output_dir, "total_buildtimes.csv"), 'a')
+            self.outputfile.write("%s %d\n" % (self.version, samples))
+            self.outputfile.close()    
+            svgfile.close()
 
 class BuildItem():
     def __init__(self, name):
@@ -220,24 +241,147 @@ class Trace():
     def __str__(self):
         return "%s (%d)\n" % (self.trace, self.buildtime)
 
+def clear_total_time_file(output_dir):
+    f = os.path.join(output_dir, "total_buildtimes.csv")
+    if os.path.isfile(f):
+        with open(f, 'w') as outputfile:
+            outputfile.write("")
+         
+
+def make_total_time_graph(output_dir):
+    with open(os.path.join(output_dir, "total_buildtimes.csv"), 'rb') as csvfile:
+        reader = csv.reader(csvfile, delimiter=' ')
+        times = []
+        data_str = ""
+        label_str = ""
+        row_nr = 1
+        for row in reader:
+            times.append({"version": row[0], "buildtime": row[1]})
+            data_str = "%s,['%s', %s]" % (data_str, row[0], row[1])
+            label_str = "%s, [%d, '%s']" % (label_str, row_nr, row[0])
+            row_nr = row_nr+1
+         
+        num_x_ticks = len(times)   
+        num_y_ticks = 10 
+     
+    links_str = ""
+    for dfg in sorted(os.listdir(output_dir)): 
+        if not os.path.isdir(os.path.join(output_dir, dfg)):
+            continue
+        links_str = "%s\n<a href=\"%s/dfg-set.html\">%s</a><br>" % (links_str, dfg, dfg)
+        
+        
+    graph = """<!DOCTYPE html >
+<html>
+<head>
+    <style type="text/css">
+body { font-family: Verdana, Arial, sans-serif; font-size: 12px; }
+#placeholder { width: 450px; height: 200px; }
+</style>
+    
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flot/0.8.3/jquery.flot.categories.js"></script>
+    <script src="https://raw.githubusercontent.com/markrcote/flot-tickrotor/master/jquery.flot.tickrotor.js"></script>
+    <script>
+    var d1 = [%DATA%];
+ 
+$(document).ready(function () {
+    $.plot($("#placeholder"), [d1], {
+        series: {
+            bars: {
+                show: true,
+                barWidth: 0.6,
+                align: "center"
+            },
+            highlightColor: 'rgb(190,232,216)'
+        },
+        grid: {
+            hoverable: true
+        },
+        xaxis: {
+            mode: "categories",
+            tickLength: 0,
+            rotateTicks: 135
+            }
+        }
+    );
+
+    $("<div id='tooltip'></div>").css({
+            position: "absolute",
+            display: "none",
+            border: "1px solid #fdd",
+            padding: "2px",
+            "background-color": "#fee",
+            opacity: 0.80
+        }).appendTo("body");
+    
+    $("#placeholder").bind("plothover", function (event, pos, item) {
+        if (item) {
+            var x = item.series.data[item.dataIndex][0],
+                y = item.datapoint[1].toFixed(2);
+                
+                $("#tooltip").html(x + " = " + y)
+                    .css({top: item.pageY+5, left: item.pageX+5})
+                .fadeIn(200);
+        } else {
+            $("#tooltip").hide();
+        }
+    });
+});
+
+    
+</script>
+</head>
+<body>
+<div id="placeholder"></div>
+<br><br>
+%LINKS%
+</body></html>"""
+    graph = graph.replace("%DATA%", data_str)
+    graph = graph.replace("%NUMXTICKS%", str(num_x_ticks))
+    graph = graph.replace("%NUMYTICKS%", str(num_y_ticks))
+    graph = graph.replace("%LABELS%", label_str)
+    graph = graph.replace("%LINKS%", links_str)
+    
+    with open(os.path.join(output_dir, "total_buildtimes.html"), 'w') as outputfile:
+        outputfile.write(graph)
+
+def mkdir_p(path):
+    try:
+        os.makedirs(path)
+    except OSError as exc: # Python >2.5
+        if exc.errno == errno.EEXIST and os.path.isdir(path):
+            pass
+        else: raise         
 
 if __name__ == "__main__":
-    datadir = "/home/corpaul/workspace/datasets/glib"
-    outputdir = "/home/corpaul/workspace/output/buildsysperf/glib"
+    data_dir = "/home/corpaul/workspace/datasets/glib"
+    output_dir = "/home/corpaul/workspace/output/buildsysperf/glib"
     app = "glib"
-    for version in sorted(os.listdir(datadir)):
-        if not os.path.isdir(os.path.join(datadir, version)):
+    
+    mkdir_p(output_dir)
+    clear_total_time_file(output_dir)
+    
+    for version in sorted(os.listdir(data_dir)):
+        if not os.path.isdir(os.path.join(data_dir, version)):
             continue
         ignore_path = "/home/adan/source/rbCode/%s/" % version
 
-        file = "%s/%s/trace1.gdf" % (datadir, version)
-        parser = GDFParser(app, version, outputdir, ignore_path)
+        file = "%s/%s/trace1.gdf" % (data_dir, version)
+        parser = GDFParser(app, version, output_dir, ignore_path)
+        
+        svg = "/home/corpaul/workspace/output/buildsysperf/glib/glib_glib-2.24.0.svg"
         parser.parse_file(file)
+        parser.parse_total_time()
+     
+    make_total_time_graph(output_dir)
+       
 
     # generate DFGs
     print "Generating DFGs"
     i = 0
-    for version in sorted(os.listdir(datadir)):
+    for version in sorted(os.listdir(data_dir)):
         if i == 0:
             old = version
             i = i + 1
@@ -248,26 +392,23 @@ if __name__ == "__main__":
 
         filename_old_new = "%s_%s-%s" % (app, old, new)
         filename_new_old = "%s_%s-%s" % (app, new, old)
-        filename_diff = "diff_%s" % filename_new_old
-        set_directory = os.path.join(outputdir, "%s-set" % filename_diff)
+        filename_diff = "diff_%s" % filename_old_new
+        set_directory = os.path.join(output_dir, "%s-set" % filename_diff)
         oldfile = "%s_%s" % (app, old)
         newfile = "%s_%s" % (app, new)
         os.system("cd ../../flamegraphdiff/ && mkdir -p %s" % set_directory)
         os.system("cd ../../flamegraphdiff/ && FlameGraph/difffolded.pl %s %s | FlameGraph/flamegraph.pl -title='%s' > %s.svg"
-                  % (os.path.join(outputdir, newfile), os.path.join(outputdir, oldfile), filename_old_new, os.path.join(set_directory, filename_old_new)))
+                  % (os.path.join(output_dir, newfile), os.path.join(output_dir, oldfile), filename_old_new, os.path.join(set_directory, filename_old_new)))
 
         os.system("cd ../../flamegraphdiff/ && FlameGraph/difffolded.pl %s %s | FlameGraph/flamegraph.pl -title='%s'  > %s.svg"
-                  % (os.path.join(outputdir, oldfile), os.path.join(outputdir, newfile), filename_new_old, os.path.join(set_directory, filename_new_old)))
+                  % (os.path.join(output_dir, oldfile), os.path.join(output_dir, newfile), filename_new_old, os.path.join(set_directory, filename_new_old)))
 
         os.system("cd ../../flamegraphdiff/ && FlameGraph/difffolded.pl -d %s %s | FlameGraph/flamegraph.pl -title='%s' > %s.svg"
-                  % (os.path.join(outputdir, oldfile), os.path.join(outputdir, newfile), filename_diff, os.path.join(set_directory, filename_diff)))
+                  % (os.path.join(output_dir, oldfile), os.path.join(output_dir, newfile), filename_diff, os.path.join(set_directory, filename_diff)))
 
         os.system("cd ../../flamegraphdiff/ && graphs/generate_dfg_report.sh %s.svg %s.svg %s.svg %s"
                   % (filename_old_new, filename_new_old, filename_diff, set_directory))
         print "%s - %s" % (old, new)
         old = version
 
-
-# FlameGraph/difffolded.pl demos/rsync/rsync_v2.txt demos/rsync/rsync_v1.txt | FlameGraph/flamegraph.pl > demos/rsync/rsync_dfg1.svg
-# $ FlameGraph/difffolded.pl demos/rsync/rsync_v1.txt demos/rsync/rsync_v2.txt | FlameGraph/flamegraph.pl > demos/rsync/rsync_dfg2.svg
-# $ FlameGraph/difffolded.pl -d demos/rsync/rsync_v1.txt demos/rsync/rsync_v2.txt | FlameGraph/flamegraph.pl > demos/rsync/rsync_dfg_diff.svg
+    make_total_time_graph(output_dir)
