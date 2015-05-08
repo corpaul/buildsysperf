@@ -104,12 +104,13 @@ class GDFParser():
         return
 
     def str_to_buildtime(self, bt_str):
+        bt = 0
         if bt_str == "[]":
-            bt = 0
+            return bt
         else:
             bt_hms = bt_str.replace("[", "").replace("]", "").split(";")
             for b in bt_hms:
-                bt = self.hms_to_seconds(b)
+                bt = bt + self.hms_to_seconds(b)
         return bt
 
     def parse_dependencies(self, obj, triggers):
@@ -174,8 +175,8 @@ class GDFParser():
 
         for b in self.builditems.itervalues():
             # let's skip the 'all' node for now.. as the complete flamegraph should represent the all node
-            if b.name == "all":
-                continue
+            #if b.name == "all":
+            #    continue
             if len(b.dependencies) == 0:
                 buildtime = b.triggered_buildtime + b.buildtime
             else:

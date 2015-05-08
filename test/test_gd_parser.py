@@ -18,6 +18,10 @@ class TestGDFParser(unittest.TestCase):
         assert self.parser.hms_to_seconds("01.10") == 1100
         pass
 
+    def str_to_buildtime(self):
+        self.parser = GDFParser("glib", "x.x", "/tmp")
+        assert self.parser.str_to_buildtime("[0:00.25;0:01.00]") == 1.25 
+
     @raises(ValueError)
     def test_hms_to_seconds_exc(self):
         self.parser = GDFParser("glib", "x.x", "/tmp")
