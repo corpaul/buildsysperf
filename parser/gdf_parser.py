@@ -156,13 +156,13 @@ class GDFParser():
         hms_regex = re.compile("^\d{1,2}:\d{2}.\d{2}$")
         ms_regex = re.compile("^\d{1,2}.\d{2}$")
         if hms_regex.match(t):
-            h, ms = [str(i) for i in t.split(':')]
-            m, s = [str(i) for i in ms.split('.')]
-            return 3600 * int(h) + 60 * int(m) + int(s)
+            m, s = [str(i) for i in t.split(':')]
+            s, cs = [str(i) for i in s.split('.')]
+            return 60000 * int(m) + 1000*int(s) + 10*int(cs)
         # 0.00 format
         elif ms_regex.match(t):
-            m, s = [str(i) for i in t.split('.')]
-            return 60 * int(m) + int(s)
+            s, cs = [str(i) for i in t.split('.')]
+            return 1000*int(s) + 10*int(cs)
         else:
             raise ValueError
             print "Unknown time format: %s (using 0 instead)" % t
@@ -268,7 +268,7 @@ def make_total_time_graph(output_dir):
     for dfg in sorted(os.listdir(output_dir)): 
         if not os.path.isdir(os.path.join(output_dir, dfg)):
             continue
-        links_str = "%s\n<a href=\"%s/dfg-set.html\">%s</a><br>" % (links_str, dfg, dfg)
+        links_str = "%s\n<a href=\"%s/dfg-set.html\" target=\"dfg\">%s</a><br>" % (links_str, dfg, dfg)
         
         
     graph = """<!DOCTYPE html >
@@ -337,6 +337,8 @@ $(document).ready(function () {
 <div id="placeholder"></div>
 <br><br>
 %LINKS%
+<br><br>
+<iframe name="dfg" style="width: 100%; min-height: 500px; scroll: auto;"></iframe>
 </body></html>"""
     graph = graph.replace("%DATA%", data_str)
     graph = graph.replace("%NUMXTICKS%", str(num_x_ticks))
