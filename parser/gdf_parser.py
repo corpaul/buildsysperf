@@ -137,8 +137,11 @@ class GDFParser():
             buildtime = obj.buildtime + buildtime
             for n in obj.dependencies:
                 dep = self.builditems[n]
-                self.find_dependencies(dep, list(path), buildtime)
+                # TODO: check if it's OK to set is_built here or that it should be set after find_dependencies
+                # note: setting it after results in recursion depth issues for ruby dataset
                 dep.is_built = True
+                self.find_dependencies(dep, list(path), buildtime)
+                
 
     def reset_is_built(self):
         for b in self.builditems.itervalues():
@@ -175,8 +178,8 @@ class GDFParser():
 
         for b in self.builditems.itervalues():
             # let's skip the 'all' node for now.. as the complete flamegraph should represent the all node
-            #if b.name == "all":
-            #    continue
+            if b.name == "all":
+                continue
             if len(b.dependencies) == 0:
                 buildtime = b.triggered_buildtime + b.buildtime
             else:
@@ -359,9 +362,12 @@ def mkdir_p(path):
         else: raise         
 
 if __name__ == "__main__":
-    data_dir = "/home/corpaul/workspace/datasets/glib"
-    output_dir = "/home/corpaul/workspace/output/buildsysperf/glib"
-    app = "glib"
+    #data_dir = "/home/corpaul/workspace/datasets/glib"
+    #output_dir = "/home/corpaul/workspace/output/buildsysperf/glib"
+    #app = "glib"
+    data_dir = "/home/corpaul/workspace/datasets/ruby_traces/ruby"
+    output_dir = "/home/corpaul/workspace/output/buildsysperf/ruby"
+    app = "ruby"
     
     mkdir_p(output_dir)
     clear_total_time_file(output_dir)
@@ -374,7 +380,6 @@ if __name__ == "__main__":
         file = "%s/%s/trace1.gdf" % (data_dir, version)
         parser = GDFParser(app, version, output_dir, ignore_path)
         
-        svg = "/home/corpaul/workspace/output/buildsysperf/glib/glib_glib-2.24.0.svg"
         parser.parse_file(file)
         parser.parse_total_time()
      
